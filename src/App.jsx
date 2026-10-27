@@ -13,14 +13,18 @@ import {
   ShieldCheck,
   Sparkles,
   UsersRound,
-  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import Header from '@/components/Header'
 import { Input } from '@/components/ui/input'
-import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { supabase, supabaseConfigured } from '@/lib/supabase'
 import logo from './assets/logo-melisa.png'
+import ClienteForm from '@/components/ClienteForm'
+import ClienteDetalle from '@/pages/ClienteDetalle'
+import Clientes from '@/pages/Clientes'
+import Citas from '@/pages/Citas'
+import Servicios from '@/pages/Servicios'
 import './App.css'
 
 const roleLabels = {
@@ -206,31 +210,50 @@ function App() {
 function Workspace({ profile, onSignOut }) {
   const isAdmin = profile.role === 'administrador'
   const { pathname } = useLocation()
-  const [pendingAction, setPendingAction] = useState('')
-  const createActions = {
-    '/citas': 'Agendar una cita',
-    '/clientes': 'Agregar un cliente',
-    '/servicios': 'Agregar un servicio',
-  }
+  const navigate = useNavigate()
+  const [showQuickClientForm, setShowQuickClientForm] = useState(false)
+  const createActionLabel = pathname === '/clientes'
+    ? 'Agregar un cliente'
+    : ''
   const navigationItems = [
     { label: 'Citas', path: '/citas', icon: CalendarDays },
     { label: 'Clientes', path: '/clientes', icon: UsersRound },
     { label: 'Servicios', path: '/servicios', icon: BriefcaseBusiness },
-    { label: 'Configuración', path: '/configuracion', icon: Settings, iconOnly: true },
+    ...(isAdmin ? [{ label: 'Configuración', path: '/configuracion', icon: Settings, iconOnly: true }] : []),
   ]
 
   return (
     <main className="workspace">
+      <aside className="workspace-sidebar">
+        <img className="workspace-sidebar__logo" src={logo} alt="Estética Integral Melisa Peralta" />
+        <nav className="workspace-sidebar__nav" aria-label="Navegación principal">
+          {navigationItems.map(({ label, path, icon: Icon }) => (
+            <NavLink
+              className={({ isActive }) => `workspace-sidebar__link${isActive ? ' workspace-sidebar__link--active' : ''}`}
+              key={label}
+              to={path}
+              aria-current={undefined}
+            >
+              <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <Button className="workspace-sidebar__signout" variant="outline" onClick={onSignOut}>
+          <LogOut size={17} aria-hidden="true" /> Cerrar sesión
+        </Button>
+      </aside>
       <Header onSignOut={onSignOut} />
       <Routes>
         <Route path="/" element={<Navigate to="/citas" replace />} />
-        <Route path="/citas" element={<ModulePage title={`Hola, ${profile.name || 'bienvenida'}.`} description="Tu calendario de citas estará disponible aquí." role={roleLabels[profile.role]} />} />
-        <Route path="/clientes" element={<ModulePage title="Clientes" description="Aquí podrás buscar clientes y consultar sus expedientes." role={roleLabels[profile.role]} />} />
-        <Route path="/servicios" element={<ModulePage title="Servicios" description="Aquí podrás consultar los servicios de la estética." role={roleLabels[profile.role]} />} />
+        <Route path="/citas" element={<Citas />} />
+        <Route path="/clientes" element={<Clientes />} />
+        <Route path="/clientes/:id" element={<ClienteDetalle />} />
+        <Route path="/servicios" element={<Servicios isAdmin={isAdmin} />} />
         <Route path="/configuracion" element={<ModulePage title="Configuración" description={isAdmin ? 'Administra las opciones del espacio de trabajo.' : 'Esta sección está disponible solo para la administradora.'} role={roleLabels[profile.role]} />} />
         <Route path="*" element={<Navigate to="/citas" replace />} />
       </Routes>
-      <nav className="bottom-nav" aria-label="Navegación principal">
+      <nav className={`bottom-nav${isAdmin ? '' : ' bottom-nav--employee'}`} aria-label="Navegación principal">
         {navigationItems.map(({ label, path, icon: Icon, iconOnly }) => (
           <NavLink
             className={({ isActive }) => `bottom-nav__item${isActive ? ' bottom-nav__item--active' : ''}${iconOnly ? ' bottom-nav__item--icon-only' : ''}`}
@@ -244,40 +267,38 @@ function Workspace({ profile, onSignOut }) {
           </NavLink>
         ))}
       </nav>
-      {createActions[pathname] && (
+      {createActionLabel && (
         <button
           className="floating-action"
           type="button"
-          aria-label={createActions[pathname]}
-          title={createActions[pathname]}
-          onClick={() => setPendingAction(createActions[pathname])}
+          aria-label={createActionLabel}
+          title={createActionLabel}
+          onClick={() => pathname === '/clientes' ? setShowQuickClientForm(true) : setShowServiceForm(true)}
         >
           <Plus size={25} strokeWidth={2.2} aria-hidden="true" />
         </button>
       )}
-      {pendingAction && (
-        <div className="creation-overlay">
-          <section className="creation-dialog" role="dialog" aria-modal="true" aria-labelledby="creation-dialog-title">
-            <button className="creation-dialog__close" type="button" aria-label="Cerrar" onClick={() => setPendingAction('')}>
-              <X size={19} aria-hidden="true" />
-            </button>
-            <span className="eyebrow text-dorado-oscuro">PRÓXIMAMENTE</span>
-            <h2 id="creation-dialog-title">{pendingAction}</h2>
-            <p>El formulario estará disponible cuando conectemos este módulo con Supabase.</p>
-            <Button className="creation-dialog__confirm" onClick={() => setPendingAction('')}>Entendido</Button>
-          </section>
-        </div>
+      {showQuickClientForm && (
+        <ClienteForm
+          quick
+          onClose={() => setShowQuickClientForm(false)}
+          onSaved={(client) => {
+            setShowQuickClientForm(false)
+            navigate(`/clientes/${client.id}`)
+          }}
+        />
       )}
     </main>
   )
 }
 
-function ModulePage({ title, description, role }) {
+function ModulePage({ title, description, role, notice = '' }) {
   return (
     <section className="workspace-main" aria-live="polite">
       <span className="eyebrow text-dorado-oscuro">{role}</span>
       <h1>{title}</h1>
       <p className="workspace-intro">{description}</p>
+      {notice && <p className="form-message form-message--success" role="status">{notice}</p>}
       <p className="role-note"><ShieldCheck size={16} aria-hidden="true" /> Acceso asignado por administración</p>
     </section>
   )
