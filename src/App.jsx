@@ -47,56 +47,66 @@ const [authLoading, setAuthLoading] = useState(false)
   const profileLoading = Boolean(session && !profile && !profileError)
 
   useEffect(() => {
-    if (!supabase) return undefined
+  if (!supabase) return undefined
 
-    let active = true
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+  let active = true
+
+  // 1. Leer sesión del caché local PRIMERO (instantáneo, sin esperar red)
+  supabase.auth.getSession().then(({ data }) => {
+    if (!active) return
+    setSession(data.session)
+    setAuthLoading(false)
+  })
+
+  // 2. Escuchar cambios de sesión (login, logout, refresh)
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    if (!active) return
+    setSession(nextSession)
+    setProfile(null)
+    setProfileError('')
+    setAuthLoading(false)
+    setMessage(null)
+  })
+
+  return () => {
+    active = false
+    subscription.unsubscribe()
+  }
+}, [])
+
+ useEffect(() => {
+  if (!supabase || !sessionUserId) return undefined
+
+  let active = true
+
+  // Timeout de seguridad: si en 5 segundos no llega el perfil, muestra error
+  const timeout = setTimeout(() => {
+    if (active) {
+      setProfileError('No se pudo cargar tu perfil. Verifica tu conexión e intenta de nuevo.')
+    }
+  }, 5000)
+
+  supabase
+    .from('usuarios')
+    .select('nombre, rol')
+    .eq('id', sessionUserId)
+    .single()
+    .then(({ data, error }) => {
       if (!active) return
-      setSession(nextSession)
-      setProfile(null)
-      setProfileError('')
-      setAuthLoading(false)
-      setMessage(null)
+      clearTimeout(timeout)
+      if (error || !data || !roleLabels[data.rol]) {
+        setProfileError('Tu cuenta no tiene un perfil válido. Solicita al administrador que revise tu acceso.')
+        setProfile(null)
+        return
+      }
+      setProfile({ name: data.nombre, role: data.rol })
     })
 
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) return
-      if (error) setMessage({ type: 'error', text: 'No fue posible recuperar tu sesión. Vuelve a iniciar sesión.' })
-      setSession(data.session)
-      setProfile(null)
-      setProfileError('')
-      setAuthLoading(false)
-    })
-
-    return () => {
-      active = false
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!supabase || !sessionUserId) return undefined
-
-    let active = true
-
-    supabase
-      .from('usuarios')
-      .select('nombre, rol')
-      .eq('id', sessionUserId)
-      .single()
-      .then(({ data, error }) => {
-        if (!active) return
-        if (error || !data || !roleLabels[data.rol]) {
-          setProfileError('Tu cuenta no tiene un perfil válido. Solicita al administrador que revise tu acceso.')
-          setProfile(null)
-          return
-        }
-        setProfile({ name: data.nombre, role: data.rol })
-      })
-    return () => {
-      active = false
-    }
-  }, [sessionUserId])
+  return () => {
+    active = false
+    clearTimeout(timeout)
+  }
+}, [sessionUserId])
 
   async function handleSignIn(event) {
     event.preventDefault()
