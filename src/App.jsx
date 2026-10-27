@@ -36,7 +36,7 @@ const currentYear = new Date().getFullYear()
 function App() {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
-  const [authLoading, setAuthLoading] = useState(supabaseConfigured)
+const [authLoading, setAuthLoading] = useState(false)
   const [profileError, setProfileError] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -273,7 +273,7 @@ function Workspace({ profile, onSignOut }) {
           type="button"
           aria-label={createActionLabel}
           title={createActionLabel}
-          onClick={() => pathname === '/clientes' ? setShowQuickClientForm(true) : setShowServiceForm(true)}
+          onClick={() => setShowQuickClientForm(true)}
         >
           <Plus size={25} strokeWidth={2.2} aria-hidden="true" />
         </button>
