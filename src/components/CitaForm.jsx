@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CalendarDays, Clock3, Plus, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
 import ClienteForm from '@/components/ClienteForm'
+import { useVisualViewport } from '@/hooks/useVisualViewport'
 
 const TODAY_ISO = new Date().toISOString().slice(0, 10)
 
@@ -39,6 +40,8 @@ function getFormError(error) {
 }
 
 function CitaForm({ appointment = null, initialDate, onClose, onSaved }) {
+  const overlayRef = useRef(null)
+  useVisualViewport(overlayRef)
   const [lookups, setLookups] = useState(null)
   const [lookupError, setLookupError] = useState(supabase ? '' : 'La conexión con Supabase no está configurada.')
   const [clientSearch, setClientSearch] = useState(appointment?.cliente?.nombre ?? '')
@@ -86,7 +89,7 @@ function CitaForm({ appointment = null, initialDate, onClose, onSaved }) {
     const timer = window.setTimeout(async () => {
       const { data, error: searchError } = await supabase
         .from('clientes')
-        .select('id, nombre, telefono, ciudad')
+        .select('id, nombre')
         .eq('activo', true)
         .ilike('nombre', `%${clientSearch.trim()}%`)
         .order('nombre')
@@ -215,7 +218,7 @@ function CitaForm({ appointment = null, initialDate, onClose, onSaved }) {
   }
 
   return (
-    <div className="creation-overlay cita-form-overlay">
+    <div ref={overlayRef} className="creation-overlay cita-form-overlay">
       <section className="creation-dialog cita-form-dialog" role="dialog" aria-modal="true" aria-labelledby="cita-form-title">
         <button className="creation-dialog__close" type="button" aria-label="Cerrar formulario" onClick={onClose} disabled={saving}>
           <X size={19} aria-hidden="true" />
@@ -228,7 +231,7 @@ function CitaForm({ appointment = null, initialDate, onClose, onSaved }) {
             <legend>Cliente</legend>
             {selectedClient ? (
               <div className="cita-form__selected-client">
-                <span><strong>{selectedClient.nombre}</strong><small>{selectedClient.telefono}</small></span>
+                <strong>{selectedClient.nombre}</strong>
                 <button type="button" onClick={() => { setSelectedClient(null); setClientSearch('') }} aria-label="Cambiar cliente">Cambiar</button>
               </div>
             ) : (
@@ -242,7 +245,7 @@ function CitaForm({ appointment = null, initialDate, onClose, onSaved }) {
                     {clientResults.map((client) => (
                       <li key={client.id}>
                         <button type="button" onClick={() => { setSelectedClient(client); setClientSearch(client.nombre); setClientResults([]) }}>
-                          <span>{client.nombre}</span><small>{client.telefono}</small>
+                          <span>{client.nombre}</span>
                         </button>
                       </li>
                     ))}

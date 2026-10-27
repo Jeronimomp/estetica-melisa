@@ -97,9 +97,14 @@ function ClienteDetalle() {
         .order('hora_inicio', { ascending: false })
 
       if (!active) return
-      const completedVisits = visitError
-        ? []
-        : (visitData ?? []).filter((visit) => visit.estado?.toLocaleLowerCase('es-MX') === 'atendida')
+     // Después:
+const estadosVisibles = ['atendida', 'confirmada']
+const completedVisits = visitError
+  ? []
+  : (visitData ?? []).filter((visit) => 
+      estadosVisibles.includes(visit.estado?.toLocaleLowerCase('es-MX'))
+    )
+       
       const visitsWithSignedPhotos = await Promise.all(completedVisits.map(async (visit) => {
         const photos = await Promise.all(asList(visit.fotos_cita).map(async (photo) => {
           if (/^https?:\/\//i.test(photo.url_foto)) return { ...photo, displayUrl: photo.url_foto }

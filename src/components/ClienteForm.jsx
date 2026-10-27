@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
+import { useVisualViewport } from '@/hooks/useVisualViewport'
 
 const requiredFields = [
   { name: 'nombre', label: 'Nombre completo', type: 'text', required: true },
@@ -61,6 +62,8 @@ function calculateBmi(weight, height) {
 }
 
 function ClienteForm({ client = null, quick = false, onClose, onSaved }) {
+  const overlayRef = useRef(null)
+  useVisualViewport(overlayRef)
   const [values, setValues] = useState(() => getInitialValues(client))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -104,7 +107,7 @@ function ClienteForm({ client = null, quick = false, onClose, onSaved }) {
   }
 
   return (
-    <div className="creation-overlay cliente-form-overlay">
+    <div ref={overlayRef} className="creation-overlay cliente-form-overlay">
       <section className="creation-dialog cliente-form-dialog" role="dialog" aria-modal="true" aria-labelledby="cliente-form-title">
         <button className="creation-dialog__close" type="button" aria-label="Cerrar formulario" onClick={onClose} disabled={saving}>
           <X size={19} aria-hidden="true" />

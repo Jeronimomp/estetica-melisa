@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
   BriefcaseBusiness,
@@ -11,7 +11,6 @@ import {
   Plus,
   Settings,
   ShieldCheck,
-  Sparkles,
   UsersRound,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -36,13 +35,14 @@ const currentYear = new Date().getFullYear()
 function App() {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
-const [authLoading, setAuthLoading] = useState(false)
+const [authLoading, setAuthLoading] = useState(Boolean(supabaseConfigured))
   const [profileError, setProfileError] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState(null)
+  const sessionUserIdRef = useRef(null)
   const sessionUserId = session?.user?.id
   const profileLoading = Boolean(session && !profile && !profileError)
 
@@ -51,21 +51,39 @@ const [authLoading, setAuthLoading] = useState(false)
 
   let active = true
 
-  // 1. Leer sesión del caché local PRIMERO (instantáneo, sin esperar red)
-  supabase.auth.getSession().then(({ data }) => {
-    if (!active) return
-    setSession(data.session)
-    setAuthLoading(false)
-  })
-
-  // 2. Escuchar cambios de sesión (login, logout, refresh)
+  // Keep the loaded profile during token refreshes; only identity changes require a reload.
   const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
     if (!active) return
+    const nextUserId = nextSession?.user?.id ?? null
+    const userChanged = sessionUserIdRef.current !== nextUserId
+    sessionUserIdRef.current = nextUserId
     setSession(nextSession)
-    setProfile(null)
-    setProfileError('')
+    if (userChanged) {
+      setProfile(null)
+      setProfileError('')
+    }
     setAuthLoading(false)
     setMessage(null)
+  })
+
+  // Restore the persisted session on initial load, including after a browser app switch.
+  supabase.auth.getSession().then(({ data, error }) => {
+    if (!active) return
+    if (error) setMessage({ type: 'error', text: 'No fue posible recuperar tu sesión. Vuelve a iniciar sesión.' })
+    const restoredSession = data.session
+    const restoredUserId = restoredSession?.user?.id ?? null
+    const userChanged = sessionUserIdRef.current !== restoredUserId
+    sessionUserIdRef.current = restoredUserId
+    setSession(restoredSession)
+    if (userChanged) {
+      setProfile(null)
+      setProfileError('')
+    }
+    setAuthLoading(false)
+  }).catch(() => {
+    if (!active) return
+    setMessage({ type: 'error', text: 'No fue posible recuperar tu sesión. Vuelve a iniciar sesión.' })
+    setAuthLoading(false)
   })
 
   return () => {
@@ -158,11 +176,8 @@ const [authLoading, setAuthLoading] = useState(false)
           <p>MELISA PERALTA</p>
         </div>
         <div className="brand-message">
-          <span className="eyebrow"><Sparkles size={14} aria-hidden="true" /> PORTAL DE EQUIPO</span>
-          <h2>Un espacio diseñado<br /><em className="text-dorado-claro">para cuidar tu apariencia</em></h2>
-          <p>Ciencia, cosmetología y bienestar en un solo lugar. Una atención cercana y profesional que empieza desde el primer contacto.</p>
+          <h2>Un espacio diseñado<br /><em className="text-dorado-claro">para cuidar tu apariencia y consentirte</em></h2>
         </div>
-        <div className="brand-panel__footer"><span>ESTÉTICA · BIENESTAR · CUIDADO</span><span>01 / 01</span></div>
       </section>
 
       <section className="auth-panel bg-crema">

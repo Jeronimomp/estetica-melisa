@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
+import { useVisualViewport } from '@/hooks/useVisualViewport'
 
 const categories = ['Facial', 'Corporal', 'Uñas', 'Depilación', 'Masajes', 'Otro']
 
 function ServicioForm({ service = null, onClose, onSaved }) {
+  const overlayRef = useRef(null)
+  useVisualViewport(overlayRef)
   const isEditing = Boolean(service?.id)
   const [values, setValues] = useState({
     nombre: service?.nombre ?? '',
@@ -64,7 +67,7 @@ function ServicioForm({ service = null, onClose, onSaved }) {
   }
 
   return (
-    <div className="creation-overlay cliente-form-overlay">
+    <div ref={overlayRef} className="creation-overlay cliente-form-overlay">
       <section className="creation-dialog cliente-form-dialog service-form-dialog" role="dialog" aria-modal="true" aria-labelledby="service-form-title">
         <button className="creation-dialog__close" type="button" aria-label="Cerrar formulario" onClick={onClose} disabled={saving}>
           <X size={19} aria-hidden="true" />
