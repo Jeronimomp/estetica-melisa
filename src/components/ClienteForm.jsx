@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
 import { useVisualViewport } from '@/hooks/useVisualViewport'
+import { normalizeHeightToMeters } from '@/lib/clinicalPatientData'
 
 const requiredFields = [
   { name: 'nombre', label: 'Nombre completo', type: 'text', required: true },
@@ -41,10 +42,13 @@ const optionalFields = [
 const allFields = [...requiredFields, ...optionalFields]
 
 function getInitialValues(client) {
-  return Object.fromEntries(allFields.map(({ name }) => [name, client?.[name] ?? '']))
+  const values = Object.fromEntries(allFields.map(({ name }) => [name, client?.[name] ?? '']))
+  values.estatura = normalizeHeightToMeters(values.estatura)
+  return values
 }
 
 function getSaveError(error) {
+  if (error?.code === '22003') return 'La estatura debe estar en metros (por ejemplo, 1.74 para 174 cm) y ser menor o igual a 3 m.'
   if (error?.code === 'PGRST205') {
     return 'Supabase no encuentra public.clientes. Verifica que la tabla esté creada y expuesta en el esquema public.'
   }
@@ -75,6 +79,10 @@ function ClienteForm({ client = null, quick = false, onClose, onSaved }) {
     setValues((current) => ({ ...current, [name]: value }))
   }
 
+  function handleHeightBlur() {
+    setValues((current) => ({ ...current, estatura: normalizeHeightToMeters(current.estatura) }))
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
     if (!supabase) {
@@ -82,10 +90,17 @@ function ClienteForm({ client = null, quick = false, onClose, onSaved }) {
       return
     }
 
+    const heightValue = normalizeHeightToMeters(values.estatura)
+    const heightNumber = Number(heightValue)
+    if (heightValue && (!Number.isFinite(heightNumber) || heightNumber < 0.3 || heightNumber > 3)) {
+      setError('Ingresa la estatura en metros, por ejemplo 1.74. El valor debe estar entre 0.30 y 3.00 m.')
+      return
+    }
+
     setSaving(true)
     setError('')
     const payload = Object.fromEntries(
-      fields.map(({ name }) => [name, values[name].trim() || null]),
+      fields.map(({ name }) => [name, name === 'estatura' ? heightValue || null : values[name].trim() || null]),
     )
     payload.nombre = values.nombre.trim()
     payload.telefono = values.telefono.trim()
@@ -153,6 +168,7 @@ function ClienteForm({ client = null, quick = false, onClose, onSaved }) {
                     required={field.required}
                     min={field.min}
                     step={field.step}
+                    onBlur={field.name === 'estatura' ? handleHeightBlur : undefined}
                     autoComplete={field.name === 'correo' ? 'email' : 'off'}
                   />
                 )}

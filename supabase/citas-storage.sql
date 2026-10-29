@@ -47,3 +47,85 @@ create policy "Empleados limpian fotos incompletas"
     bucket_id = 'fotos-cita'
     and owner_id = (select auth.uid())::text
   );
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'firmas-consentimientos',
+  'firmas-consentimientos',
+  false,
+  2097152,
+  array['image/png']
+)
+on conflict (id) do update
+  set public = false,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Empleados consultan firmas de historias" on storage.objects;
+create policy "Empleados consultan firmas de historias"
+  on storage.objects for select
+  to authenticated
+  using (
+    bucket_id = 'firmas-consentimientos'
+    and exists (
+      select 1
+      from public.usuarios
+      where usuarios.id = (select auth.uid())
+        and usuarios.rol in ('administrador', 'empleado')
+    )
+  );
+
+drop policy if exists "Empleados suben firmas de historias" on storage.objects;
+create policy "Empleados suben firmas de historias"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'firmas-consentimientos'
+    and exists (
+      select 1
+      from public.usuarios
+      where usuarios.id = (select auth.uid())
+        and usuarios.rol in ('administrador', 'empleado')
+    )
+  );
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'firmas-asistencias',
+  'firmas-asistencias',
+  false,
+  2097152,
+  array['image/png']
+)
+on conflict (id) do update
+  set public = false,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Empleados consultan firmas de asistencias" on storage.objects;
+create policy "Empleados consultan firmas de asistencias"
+  on storage.objects for select
+  to authenticated
+  using (
+    bucket_id = 'firmas-asistencias'
+    and exists (
+      select 1
+      from public.usuarios
+      where usuarios.id = (select auth.uid())
+        and usuarios.rol in ('administrador', 'empleado')
+    )
+  );
+
+drop policy if exists "Empleados suben firmas de asistencias" on storage.objects;
+create policy "Empleados suben firmas de asistencias"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'firmas-asistencias'
+    and exists (
+      select 1
+      from public.usuarios
+      where usuarios.id = (select auth.uid())
+        and usuarios.rol in ('administrador', 'empleado')
+    )
+  );

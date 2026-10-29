@@ -274,7 +274,7 @@ function CitaForm({ appointment = null, initialDate, onClose, onSaved }) {
               <span>Servicio *</span>
               <select id="appointment-service" className="cliente-form__select" value={servicioId} onChange={(event) => setServicioId(event.target.value)} required>
                 <option value="">Seleccionar servicio</option>
-                {lookups?.servicios.map((service) => <option key={service.id} value={service.id}>{service.nombre} · {service.duracion_minutos} min</option>)}
+                {lookups?.servicios.map((service) => <option key={service.id} value={service.id}>{service.categoria ? `${service.categoria} · ` : ''}{service.nombre} · {service.duracion_minutos} min</option>)}
               </select>
             </label>
             <label className="cliente-form__field" htmlFor="appointment-date">

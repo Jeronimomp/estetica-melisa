@@ -10,6 +10,11 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import CitaForm from '@/components/CitaForm'
+import HistoriaClinicaFacial from '@/components/HistoriaClinicaFacial'
+import HistoriaClinicaCorporal from '@/components/HistoriaClinicaCorporal'
+import HistoriaClinicaGeneral from '@/components/HistoriaClinicaGeneral'
+import FirmaAsistencia from '@/components/FirmaAsistencia'
+import { uploadAttendanceSignature } from '@/lib/clinicalSignature'
 
 const photoBucket = 'fotos-cita'
 const today = new Date()
@@ -29,6 +34,15 @@ function pad(value) {
 
 function toDateKey(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function isOverdueAppointment(appointment) {
+  if (!appointment?.fecha || ['atendida', 'cancelada'].includes(appointment.estado)) return false
+  const appointmentDate = new Date(`${appointment.fecha.slice(0, 10)}T00:00:00`)
+  if (Number.isNaN(appointmentDate.getTime())) return false
+  const todayDate = new Date()
+  todayDate.setHours(0, 0, 0, 0)
+  return appointmentDate < todayDate
 }
 
 function getMonthKey(date) {
@@ -68,7 +82,7 @@ function getStorageError(error) {
   if (error?.statusCode === '403' || error?.status === 403) {
     return 'Storage rechazó la foto. Revisa las políticas de storage.objects en supabase/citas-storage.sql.'
   }
-  return 'No se pudo subir la foto. Inténtalo de nuevo.'
+  return `No se pudo subir la foto: ${error?.message || 'error desconocido de Storage.'}`
 }
 
 function asOne(value) {
@@ -90,12 +104,42 @@ function formatTime(value) {
   return new Intl.DateTimeFormat('es-MX', { hour: 'numeric', minute: '2-digit' }).format(new Date(2020, 0, 1, hours, minutes))
 }
 
-function getPhotoExtension(file) {
-  const extension = file.name.split('.').pop()?.toLowerCase()
-  if (extension && /^[a-z0-9]{2,5}$/.test(extension)) return extension
-  if (file.type === 'image/png') return 'png'
-  if (file.type === 'image/webp') return 'webp'
-  return 'jpg'
+function isImageFile(file) {
+  const mimeType = file.type?.toLowerCase() ?? ''
+  const extension = file.name?.split('.').pop()?.toLowerCase() ?? ''
+  return mimeType.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'gif', 'bmp'].includes(extension)
+}
+
+function convertPhotoToJpeg(file) {
+  return new Promise((resolve, reject) => {
+    const sourceUrl = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      const scale = Math.min(1, 2400 / Math.max(image.naturalWidth, image.naturalHeight))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+      const context = canvas.getContext('2d')
+      if (!context) {
+        URL.revokeObjectURL(sourceUrl)
+        reject(new Error('No se pudo procesar la imagen en este dispositivo.'))
+        return
+      }
+      context.fillStyle = '#fff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(image, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(sourceUrl)
+        if (blob) resolve(blob)
+        else reject(new Error('No se pudo convertir la imagen a JPEG.'))
+      }, 'image/jpeg', 0.9)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(sourceUrl)
+      reject(new Error('El formato de esta imagen no se puede leer en este dispositivo. Selecciona otra foto en JPEG o PNG.'))
+    }
+    image.src = sourceUrl
+  })
 }
 
 function Citas() {
@@ -104,6 +148,9 @@ function Citas() {
   const [loadResult, setLoadResult] = useState(null)
   const [reloadToken, setReloadToken] = useState(0)
   const [formState, setFormState] = useState(null)
+  const [clinicalTarget, setClinicalTarget] = useState(null)
+  const [attendanceTarget, setAttendanceTarget] = useState(null)
+  const [preparedAttendance, setPreparedAttendance] = useState(null)
   const [cancelTarget, setCancelTarget] = useState(null)
   const [cancelError, setCancelError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -120,8 +167,16 @@ function Citas() {
     : currentResult?.error ?? ''
   const calendarDays = useMemo(() => getCalendarDays(month), [month])
   const selectedAppointments = appointments.filter((appointment) => appointment.fecha === selectedDate)
+  const clinicalCategory = asOne(clinicalTarget?.servicio)?.categoria?.toLocaleLowerCase('es-MX')
+  const ClinicalHistoryForm = clinicalCategory === 'facial'
+    ? HistoriaClinicaFacial
+    : clinicalCategory === 'corporal'
+      ? HistoriaClinicaCorporal
+      : HistoriaClinicaGeneral
   const appointmentCounts = useMemo(() => appointments.reduce((counts, appointment) => {
-    counts[appointment.fecha] = (counts[appointment.fecha] ?? 0) + 1
+    counts[appointment.fecha] ??= { total: 0, hasOverdue: false }
+    counts[appointment.fecha].total += 1
+    if (isOverdueAppointment(appointment)) counts[appointment.fecha].hasOverdue = true
     return counts
   }, {}), [appointments])
 
@@ -133,7 +188,7 @@ function Citas() {
     async function loadAppointments() {
       const { data, error } = await supabase
         .from('citas')
-        .select('id, cliente_id, profesional_id, servicio_id, empleado_id, fecha, hora_inicio, hora_fin, estado, notas, cliente:clientes(id, nombre, telefono), profesional:profesionales(id, nombre, especialidad), servicio:servicios(id, nombre, duracion_minutos), fotos_cita(id, tipo, url_foto, fecha_subida)')
+        .select('id, cliente_id, profesional_id, servicio_id, empleado_id, fecha, hora_inicio, hora_fin, estado, notas, cliente:clientes(id, nombre, correo, telefono, fecha_nacimiento, estado_civil, peso, estatura), profesional:profesionales(id, nombre, especialidad), servicio:servicios(id, nombre, categoria, sesiones, requiere_consentimiento, duracion_minutos), historia_clinica(id, tipo), fotos_cita(id, tipo, url_foto, fecha_subida)')
         .gte('fecha', start)
         .lt('fecha', end)
         .order('fecha', { ascending: true })
@@ -189,6 +244,156 @@ function Citas() {
     setReloadToken((current) => current + 1)
   }
 
+  async function handleClinicalHistorySaved(appointment) {
+    if (appointment.packageClinicalContext) {
+      if (appointment.packageAttendanceContext) setPreparedAttendance(appointment.packageAttendanceContext)
+      return { ok: true }
+    }
+    if (!supabase) return { error: 'la conexión con Supabase no está configurada.' }
+    setBusyAppointmentId(appointment.id)
+    setActionError('')
+    let updateResult
+    try {
+      updateResult = await supabase.from('citas')
+        .update({ estado: 'atendida', updated_at: getUpdatedAt() })
+        .eq('id', appointment.id)
+        .select('id')
+        .maybeSingle()
+    } catch {
+      setBusyAppointmentId('')
+      return { error: 'no se pudo actualizar el estado de la cita. Intenta de nuevo.' }
+    }
+    setBusyAppointmentId('')
+    if (updateResult.error) return { error: getAppointmentError(updateResult.error) }
+    if (!updateResult.data) return { error: 'no se confirmó el cambio de estado. Verifica los permisos de tu cuenta.' }
+
+    setLoadResult((current) => current?.monthKey === monthKey
+      ? { ...current, appointments: current.appointments.map((item) => item.id === appointment.id ? { ...item, estado: 'atendida' } : item) }
+      : current)
+    setReloadToken((current) => current + 1)
+    return { ok: true }
+  }
+
+  async function handleMarkAttended(appointment) {
+    const service = asOne(appointment.servicio)
+    const totalSessions = Math.max(1, Number(service?.sesiones) || 1)
+    if (totalSessions <= 1) {
+      setClinicalTarget(appointment)
+      return
+    }
+    if (!supabase || busyAppointmentId) return
+
+    setBusyAppointmentId(appointment.id)
+    setActionError('')
+    try {
+      const { data: activeTreatment, error: treatmentQueryError } = await supabase.from('tratamientos')
+        .select('*')
+        .eq('cliente_id', appointment.cliente_id)
+        .eq('servicio_id', appointment.servicio_id)
+        .eq('estado', 'en_curso')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (treatmentQueryError) throw new Error(treatmentQueryError.message || 'No se pudo consultar el tratamiento activo.')
+
+      let treatment = activeTreatment
+      if (!treatment) {
+        const { data, error: insertError } = await supabase.from('tratamientos').insert({
+          cliente_id: appointment.cliente_id,
+          servicio_id: appointment.servicio_id,
+          profesional_id: appointment.profesional_id,
+          total_sesiones: totalSessions,
+          sesiones_completadas: 0,
+          fecha_inicio: toDateKey(new Date()),
+          estado: 'en_curso',
+        }).select('*').single()
+        if (insertError) throw new Error(insertError.message || 'No se pudo crear el tratamiento.')
+        treatment = data
+      }
+
+      const numeroSesion = (Number(treatment.sesiones_completadas) || 0) + 1
+      const treatmentTotal = Number(treatment.total_sesiones) || totalSessions
+      if (numeroSesion > treatmentTotal) throw new Error('El tratamiento ya completó todas sus sesiones.')
+      const attendanceContext = {
+        appointment,
+        treatmentId: treatment.id,
+        numeroSesion,
+        totalSesiones: treatmentTotal,
+        esPrimeraSesion: numeroSesion === 1,
+        service,
+      }
+
+      if (numeroSesion === 1) {
+        const { data: existingHistory, error: historyQueryError } = await supabase.from('historia_clinica')
+          .select('id')
+          .eq('cita_id', appointment.id)
+          .limit(1)
+          .maybeSingle()
+        if (historyQueryError) throw new Error(historyQueryError.message || 'No se pudo verificar la historia clínica de primera sesión.')
+        if (existingHistory) {
+          setPreparedAttendance(attendanceContext)
+        } else {
+          setClinicalTarget({ ...appointment, packageClinicalContext: true, packageAttendanceContext: attendanceContext })
+        }
+      } else {
+        setAttendanceTarget(attendanceContext)
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'No se pudo preparar la firma de asistencia.')
+    }
+    setBusyAppointmentId('')
+  }
+
+  async function confirmSessionAttendance({ signatureCanvas, observaciones, tratamientoId, numeroSesion, totalSesiones, cita }) {
+    if (!supabase) return { error: 'la conexión con Supabase no está configurada.' }
+    const { path, error: signatureError } = await uploadAttendanceSignature(signatureCanvas, tratamientoId, numeroSesion)
+    if (signatureError) return { error: signatureError }
+
+    const { data: existingAttendance, error: attendanceQueryError } = await supabase.from('asistencias_sesion')
+      .select('id')
+      .eq('tratamiento_id', tratamientoId)
+      .eq('numero_sesion', numeroSesion)
+      .limit(1)
+      .maybeSingle()
+    if (attendanceQueryError) return { error: attendanceQueryError.message || 'No se pudo verificar la asistencia existente.' }
+
+    const attendanceData = {
+      tratamiento_id: tratamientoId,
+      cita_id: cita.id,
+      numero_sesion: numeroSesion,
+      fecha_asistencia: toDateKey(new Date()),
+      hora_inicio: cita.hora_inicio,
+      firma_paciente_url: path,
+      profesional_id: cita.profesional_id,
+      observaciones_sesion: observaciones || null,
+    }
+    const attendanceResult = existingAttendance
+      ? await supabase.from('asistencias_sesion').update(attendanceData).eq('id', existingAttendance.id)
+      : await supabase.from('asistencias_sesion').insert(attendanceData)
+    if (attendanceResult.error) return { error: attendanceResult.error.message || 'No se pudo guardar la asistencia.' }
+
+    const treatmentUpdate = { sesiones_completadas: numeroSesion }
+    if (numeroSesion === totalSesiones) treatmentUpdate.estado = 'completado'
+    const { error: treatmentUpdateError } = await supabase.from('tratamientos').update(treatmentUpdate).eq('id', tratamientoId)
+    if (treatmentUpdateError) return { error: treatmentUpdateError.message || 'La asistencia se guardó, pero no se pudo actualizar el tratamiento.' }
+
+    const { data: updatedAppointment, error: appointmentUpdateError } = await supabase.from('citas')
+      .update({ estado: 'atendida', updated_at: getUpdatedAt() })
+      .eq('id', cita.id)
+      .select('id')
+      .maybeSingle()
+    if (appointmentUpdateError) return { error: getAppointmentError(appointmentUpdateError) }
+    if (!updatedAppointment) return { error: 'La asistencia se guardó, pero no se confirmó el cambio de estado de la cita.' }
+
+    setLoadResult((current) => current?.monthKey === monthKey
+      ? { ...current, appointments: current.appointments.map((item) => item.id === cita.id ? { ...item, estado: 'atendida' } : item) }
+      : current)
+    setPreparedAttendance(null)
+    setAttendanceTarget(null)
+    setReloadToken((current) => current + 1)
+    return { ok: true }
+  }
+
   async function confirmCancellation() {
     if (!cancelTarget) return
     setBusyAppointmentId(cancelTarget.id)
@@ -217,7 +422,11 @@ function Citas() {
     const photoContext = photoContextRef.current
     event.target.value = ''
     if (!file || !photoContext || !supabase) return
-    if (!file.type.startsWith('image/')) {
+    if (file.size <= 0) {
+      setActionError('El archivo seleccionado está vacío. Toma la foto de nuevo e inténtalo otra vez.')
+      return
+    }
+    if (!isImageFile(file)) {
       setActionError('Selecciona un archivo de imagen válido.')
       return
     }
@@ -230,40 +439,39 @@ function Citas() {
     const uploadKey = `${appointment.id}:${type}`
     setUploadingPhoto(uploadKey)
     setActionError('')
+    console.log('Archivo a subir:', { size: file.size, type: file.type || 'MIME no detectado' })
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    if (userError || !user) {
-      setActionError('No se pudo verificar la sesión. Inicia sesión de nuevo.')
-      setUploadingPhoto('')
-      return
-    }
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      if (userError || !user) throw new Error('No se pudo verificar la sesión. Inicia sesión de nuevo.')
+      const photoBlob = await convertPhotoToJpeg(file)
+      const storagePath = `${appointment.cliente_id}/${appointment.id}/${type}-${makeUploadToken()}.jpg`
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from(photoBucket)
+        .upload(storagePath, photoBlob, { contentType: 'image/jpeg', cacheControl: '3600', upsert: false })
 
-    const storagePath = `${appointment.cliente_id}/${appointment.id}/${type}-${makeUploadToken()}.${getPhotoExtension(file)}`
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from(photoBucket)
-      .upload(storagePath, file, { contentType: file.type, cacheControl: '3600', upsert: false })
+      if (uploadError) throw uploadError
 
-    if (uploadError) {
+      const { error: photoRowError } = await supabase
+        .from('fotos_cita')
+        .insert({
+          cita_id: appointment.id,
+          cliente_id: appointment.cliente_id,
+          tipo: type,
+          url_foto: uploadData.path,
+          fecha_subida: new Date().toISOString(),
+          subida_por: user.id,
+        })
+
+      if (photoRowError) {
+        await supabase.storage.from(photoBucket).remove([uploadData.path])
+        throw photoRowError
+      }
+    } catch (uploadError) {
+      console.error('Error detallado al subir foto:', uploadError)
+      console.error('Mensaje:', uploadError?.message)
+      console.error('Status:', uploadError?.statusCode ?? uploadError?.status)
       setActionError(getStorageError(uploadError))
-      setUploadingPhoto('')
-      return
-    }
-
-    const { error: photoRowError } = await supabase
-      .from('fotos_cita')
-      .insert({
-        cita_id: appointment.id,
-        cliente_id: appointment.cliente_id,
-        tipo: type,
-        url_foto: uploadData.path,
-        subida_por: user.id,
-      })
-
-    if (photoRowError) {
-      await supabase.storage.from(photoBucket).remove([uploadData.path])
-      setActionError(photoRowError.code === '42501'
-        ? 'Tu cuenta no tiene permiso para registrar fotos en fotos_cita.'
-        : 'La imagen se subió, pero no se pudo registrar en fotos_cita. Inténtalo de nuevo.')
       setUploadingPhoto('')
       return
     }
@@ -308,22 +516,24 @@ function Citas() {
         </div>
         <div className="calendar-grid" role="grid" aria-label={formatMonth(month)}>
           {calendarDays.map(({ date, key, inMonth }) => {
-            const count = appointmentCounts[key] ?? 0
+            const dayAppointments = appointmentCounts[key] ?? { total: 0, hasOverdue: false }
+            const count = dayAppointments.total
             const isSelected = selectedDate === key
             const isToday = toDateKey(today) === key
+            const overdueClass = dayAppointments.hasOverdue ? ' calendar-day--has-overdue' : ''
             return (
               <button
                 key={key}
                 type="button"
                 role="gridcell"
-                className={`calendar-day${inMonth ? '' : ' calendar-day--outside'}${isSelected ? ' calendar-day--selected' : ''}${isToday ? ' calendar-day--today' : ''}`}
-                aria-label={`${date.getDate()} ${formatMonth(date)}${count ? `, ${count} ${count === 1 ? 'cita' : 'citas'}` : ''}`}
+                className={`calendar-day${inMonth ? '' : ' calendar-day--outside'}${isSelected ? ' calendar-day--selected' : ''}${isToday ? ' calendar-day--today' : ''}${overdueClass}`}
+                aria-label={`${date.getDate()} ${formatMonth(date)}${count ? `, ${count} ${count === 1 ? 'cita' : 'citas'}` : ''}${dayAppointments.hasOverdue ? ', con citas vencidas no atendidas' : ''}`}
                 aria-pressed={isSelected}
                 disabled={!inMonth}
                 onClick={() => setSelectedDate(key)}
               >
                 <span>{date.getDate()}</span>
-                {count > 0 && <span className="calendar-day__count">{count}</span>}
+                {count > 0 && <span className={`calendar-day__count${dayAppointments.hasOverdue ? ' calendar-day__count--overdue' : ''}`}>{count}</span>}
               </button>
             )
           })}
@@ -351,10 +561,12 @@ function Citas() {
             const professional = asOne(appointment.profesional)
             const service = asOne(appointment.servicio)
             const photos = appointment.fotos_cita ?? []
-            const hasClinicalHistory = (appointment.historia_clinica ?? []).length > 0
             const isBusy = busyAppointmentId === appointment.id
+            const isOverdue = isOverdueAppointment(appointment)
+            const attendanceReady = preparedAttendance?.appointment.id === appointment.id
+            const isPackageService = Number(service?.sesiones) > 1
             return (
-              <article className={`appointment-card appointment-card--${appointment.estado}`} key={appointment.id}>
+              <article className={`appointment-card appointment-card--${appointment.estado}${isOverdue ? ' appointment-card--overdue' : ''}`} key={appointment.id}>
                 <div className="appointment-card__time">
                   <strong>{formatTime(appointment.hora_inicio)}</strong>
                   <span>{formatTime(appointment.hora_fin)}</span>
@@ -365,8 +577,9 @@ function Citas() {
                       <h3>{client?.nombre || 'Cliente'}</h3>
                       <p>{service?.nombre || 'Servicio'} · {professional?.nombre || 'Profesional'}</p>
                     </div>
-                    <span className={`appointment-status appointment-status--${appointment.estado}`}>{appointment.estado.replace('_', ' ')}</span>
+                    <span className={`appointment-status appointment-status--${isOverdue ? 'overdue' : appointment.estado}`}>{isOverdue ? 'No atendida' : appointment.estado.replace('_', ' ')}</span>
                   </header>
+                  {isOverdue && <p className="appointment-card__overdue-note">Esta cita no fue atendida</p>}
                   {appointment.notas && <p className="appointment-card__notes">{appointment.notas}</p>}
 
                   {photos.length > 0 && (
@@ -383,22 +596,22 @@ function Citas() {
                   )}
 
                   <div className="appointment-card__actions">
-                    {appointment.estado === 'pendiente' && (
+                    {appointment.estado === 'pendiente' && !isOverdue && (
                       <button className="appointment-action appointment-action--confirm" type="button" disabled={isBusy} onClick={() => updateAppointment(appointment, { estado: 'confirmada' })}>
                         <Check size={15} aria-hidden="true" /> Confirmar
                       </button>
                     )}
-                    {(appointment.estado === 'pendiente' || appointment.estado === 'confirmada') && (
-                      <>
-                        <button className="appointment-action" type="button" disabled={isBusy} onClick={() => setFormState({ mode: 'edit', appointment })}>
-                          <Pencil size={15} aria-hidden="true" /> Cambiar fecha
-                        </button>
-                        <button className="appointment-action appointment-action--cancel" type="button" disabled={isBusy} onClick={() => { setCancelError(''); setCancelTarget(appointment) }}>
-                          <X size={15} aria-hidden="true" /> Cancelar
-                        </button>
-                      </>
+                    {(appointment.estado === 'pendiente' || appointment.estado === 'confirmada') && !isOverdue && (
+                      <button className="appointment-action" type="button" disabled={isBusy} onClick={() => setFormState({ mode: 'edit', appointment })}>
+                        <Pencil size={15} aria-hidden="true" /> Cambiar fecha
+                      </button>
                     )}
-                    {appointment.estado === 'confirmada' && (
+                    {(appointment.estado === 'pendiente' || appointment.estado === 'confirmada') && (
+                      <button className="appointment-action appointment-action--cancel" type="button" disabled={isBusy} onClick={() => { setCancelError(''); setCancelTarget(appointment) }}>
+                        <X size={15} aria-hidden="true" /> Cancelar
+                      </button>
+                    )}
+                    {appointment.estado === 'confirmada' && !isOverdue && !isPackageService && (
                       <>
                         <button className="appointment-action" type="button" disabled={Boolean(uploadingPhoto)} onClick={() => requestPhoto(appointment, 'antes')}>
                           <Camera size={15} aria-hidden="true" /> Foto antes
@@ -406,10 +619,13 @@ function Citas() {
                         <button className="appointment-action" type="button" disabled={Boolean(uploadingPhoto)} onClick={() => requestPhoto(appointment, 'despues')}>
                           <Camera size={15} aria-hidden="true" /> Foto después
                         </button>
-                        <button className="appointment-action appointment-action--confirm" type="button" disabled={isBusy || !hasClinicalHistory} onClick={() => updateAppointment(appointment, { estado: 'atendida' })}>
-                          <Check size={15} aria-hidden="true" /> Marcar atendida
-                        </button>
-                        {!hasClinicalHistory && <span className="appointment-clinical-required">La historia clínica es obligatoria antes de marcar como atendida.</span>}
+                      </>
+                    )}
+                    {appointment.estado === 'confirmada' && !isOverdue && (
+                      <>
+                        {attendanceReady
+                          ? <button className="appointment-action appointment-action--confirm" type="button" disabled={isBusy} onClick={() => setAttendanceTarget(preparedAttendance)}><Check size={15} aria-hidden="true" /> Firmar asistencia</button>
+                          : <button className="appointment-action appointment-action--confirm" type="button" disabled={isBusy} onClick={() => { setActionError(''); handleMarkAttended(appointment) }}><Check size={15} aria-hidden="true" /> Marcar atendida</button>}
                       </>
                     )}
                     {uploadingPhoto.startsWith(`${appointment.id}:`) && <span className="appointment-uploading">Subiendo foto…</span>}
@@ -422,6 +638,22 @@ function Citas() {
       </section>
 
       <input ref={photoInputRef} className="visually-hidden-file" type="file" accept="image/*" capture="environment" onChange={handlePhotoSelected} />
+
+      {attendanceTarget && !clinicalTarget && (
+        <FirmaAsistencia
+          cita={attendanceTarget.appointment}
+          tratamientoId={attendanceTarget.treatmentId}
+          servicio={attendanceTarget.service?.nombre}
+          numeroSesion={attendanceTarget.numeroSesion}
+          totalSesiones={attendanceTarget.totalSesiones}
+          esPrimeraSesion={attendanceTarget.esPrimeraSesion}
+          onCerrar={() => setAttendanceTarget(null)}
+          onConfirmar={confirmSessionAttendance}
+          onIrHistoria={() => setClinicalTarget({ ...attendanceTarget.appointment, packageClinicalContext: true })}
+        />
+      )}
+
+      {clinicalTarget && <ClinicalHistoryForm cita={clinicalTarget} onGuardado={() => handleClinicalHistorySaved(clinicalTarget)} onCerrar={() => setClinicalTarget(null)} />}
 
       {formState && (
         <CitaForm

@@ -1,18 +1,24 @@
 import { useEffect, useState } from 'react'
-import { Clock3, Pencil, Plus, Search, ShieldCheck, Sparkles } from 'lucide-react'
+import { Clock3, Pencil, Plus, Search, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
 import ServicioForm from '@/components/ServicioForm'
 
-const categories = ['Facial', 'Corporal', 'Uñas', 'Otro']
+const categories = ['Facial', 'Corporal', 'Uñas', 'Depilación', 'Masajes', 'Otro']
 const emptyServices = []
 
 function getServiceError(error) {
   if (error?.code === 'PGRST205') return 'Supabase no encuentra public.servicios. Verifica que la tabla esté creada y expuesta.'
-  if (error?.code === '42703' || error?.code === 'PGRST204') return 'Falta actualizar public.servicios con sus columnas más recientes, incluida sesiones.'
+  if (error?.code === '42703' || error?.code === 'PGRST204') return 'Falta actualizar public.servicios con sus columnas más recientes, incluidas categoria y sesiones.'
   if (error?.code === '42501' || error?.code === 'PGRST301') return 'Tu cuenta no tiene permiso para consultar servicios.'
   return 'No se pudieron cargar los servicios. Inténtalo de nuevo.'
+}
+
+function getServiceDeleteError(error) {
+  if (error?.code === '23503') return 'No se puede eliminar porque hay citas relacionadas. Puedes desactivar el servicio para retirarlo de nuevas citas.'
+  if (error?.code === '42501' || error?.code === 'PGRST301') return 'Solo un administrador puede eliminar servicios.'
+  return 'No se pudo eliminar el servicio. Inténtalo de nuevo.'
 }
 
 function formatPrice(value) {
@@ -82,6 +88,7 @@ function Servicios({ isAdmin }) {
   }, [category, isAdmin, requestKey, search, visibility])
 
   async function toggleActive(service) {
+    if (!isAdmin || !supabase || busyServiceId) return
     const nextActive = !service.activo
     const action = nextActive ? 'activar' : 'desactivar'
     if (!window.confirm(`¿Seguro que deseas ${action} el servicio “${service.nombre}”?`)) return
@@ -102,6 +109,27 @@ function Servicios({ isAdmin }) {
       return
     }
     setNotice(nextActive ? 'Servicio activado.' : 'Servicio desactivado; ya no se ofrecerá para nuevas citas.')
+    setRefresh((current) => current + 1)
+  }
+
+  async function deleteService(service) {
+    if (!isAdmin || !supabase || busyServiceId) return
+    if (!window.confirm(`¿Seguro que deseas eliminar el servicio “${service.nombre}”? Esta acción no se puede deshacer.`)) return
+
+    setBusyServiceId(service.id)
+    setActionError('')
+    setNotice('')
+    const { data, error: deleteError } = await supabase.from('servicios').delete().eq('id', service.id).select('id').maybeSingle()
+    setBusyServiceId('')
+    if (deleteError) {
+      setActionError(getServiceDeleteError(deleteError))
+      return
+    }
+    if (!data) {
+      setActionError('No se pudo confirmar la eliminación. Verifica los permisos de tu cuenta.')
+      return
+    }
+    setNotice(`${service.nombre} se eliminó correctamente.`)
     setRefresh((current) => current + 1)
   }
 
@@ -196,7 +224,7 @@ function Servicios({ isAdmin }) {
           {services.map((service) => (
             <article className={`service-card${service.activo ? '' : ' service-card--inactive'}`} key={service.id}>
               <div className="service-card__heading">
-                <span className="service-card__category">{service.categoria}</span>
+                <span className="service-card__category">{service.categoria || 'Sin categoría'}</span>
                 {isAdmin && <span className={`service-card__state${service.activo ? '' : ' service-card__state--inactive'}`}>{service.activo ? 'Activo' : 'Inactivo'}</span>}
               </div>
               <h2>{service.nombre}</h2>
@@ -214,7 +242,10 @@ function Servicios({ isAdmin }) {
                   <button type="button" className="service-card__edit" onClick={() => setServiceForm({ mode: 'edit', service })}>
                     <Pencil size={15} aria-hidden="true" /> Editar
                   </button>
-                  <button type="button" className="service-card__toggle" disabled={busyServiceId === service.id} onClick={() => toggleActive(service)}>
+                  <button type="button" className="service-card__delete" disabled={Boolean(busyServiceId)} onClick={() => deleteService(service)}>
+                    <Trash2 size={15} aria-hidden="true" /> Eliminar
+                  </button>
+                  <button type="button" className="service-card__toggle" disabled={Boolean(busyServiceId)} onClick={() => toggleActive(service)}>
                     {service.activo ? 'Desactivar' : 'Activar'}
                   </button>
                 </div>

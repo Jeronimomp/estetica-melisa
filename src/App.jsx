@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
+  Bell,
   BriefcaseBusiness,
   CalendarDays,
+  ChevronRight,
   Eye,
   EyeOff,
   LockKeyhole,
@@ -16,7 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import Header from '@/components/Header'
 import { Input } from '@/components/ui/input'
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { supabase, supabaseConfigured } from '@/lib/supabase'
 import logo from './assets/logo-melisa.png'
 import ClienteForm from '@/components/ClienteForm'
@@ -31,6 +33,97 @@ const roleLabels = {
   empleado: 'Equipo de atención',
 }
 const currentYear = new Date().getFullYear()
+
+function BirthdayNotifications() {
+  const panelRef = useRef(null)
+  const [birthdays, setBirthdays] = useState([])
+  const [loading, setLoading] = useState(Boolean(supabase))
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!supabase) return undefined
+    let active = true
+
+    async function loadBirthdays() {
+      const { data, error: queryError } = await supabase
+        .from('clientes')
+        .select('id, nombre, fecha_nacimiento')
+        .eq('activo', true)
+        .not('fecha_nacimiento', 'is', null)
+        .order('nombre', { ascending: true })
+
+      if (!active) return
+      if (queryError) {
+        setError('No se pudieron cargar los cumpleaños de hoy.')
+      } else {
+        const now = new Date()
+        setBirthdays((data ?? []).filter((client) => {
+          const [, month, day] = client.fecha_nacimiento.slice(0, 10).split('-').map(Number)
+          return month === now.getMonth() + 1 && day === now.getDate()
+        }))
+      }
+      setLoading(false)
+    }
+
+    loadBirthdays()
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return undefined
+    function handlePointerDown(event) {
+      if (!panelRef.current?.contains(event.target)) setOpen(false)
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className="birthday-notifications" ref={panelRef}>
+      <button
+        className="birthday-notifications__trigger"
+        type="button"
+        aria-label={`Cumpleaños de hoy: ${birthdays.length}`}
+        aria-expanded={open}
+        aria-controls="birthday-notifications-panel"
+        title={`${birthdays.length} cumpleaños hoy`}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Bell size={20} aria-hidden="true" />
+        <span className="birthday-notifications__count">{birthdays.length}</span>
+      </button>
+      {open && (
+        <section className="birthday-notifications__panel" id="birthday-notifications-panel" aria-label="Cumpleaños de hoy">
+          <header><h2>Cumpleaños de hoy</h2><span>{birthdays.length}</span></header>
+          {loading && <p role="status">Cargando cumpleaños…</p>}
+          {error && <p className="birthday-notifications__error" role="alert">{error}</p>}
+          {!loading && !error && birthdays.length === 0 && <p className="birthday-notifications__empty">No hay cumpleaños hoy.</p>}
+          {!loading && birthdays.length > 0 && (
+            <ul>
+              {birthdays.map((client) => (
+                <li key={client.id}>
+                  <Link to={`/clientes/${client.id}`} onClick={() => setOpen(false)}>
+                    <span className="birthday-notifications__avatar" aria-hidden="true">{client.nombre.trim().slice(0, 1).toLocaleUpperCase('es-MX')}</span>
+                    <span>{client.nombre}</span>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
 
 function App() {
   const [session, setSession] = useState(null)
@@ -249,6 +342,7 @@ function Workspace({ profile, onSignOut }) {
 
   return (
     <main className="workspace">
+      <BirthdayNotifications />
       <aside className="workspace-sidebar">
         <img className="workspace-sidebar__logo" src={logo} alt="Estética Integral Melisa Peralta" />
         <nav className="workspace-sidebar__nav" aria-label="Navegación principal">
@@ -272,7 +366,7 @@ function Workspace({ profile, onSignOut }) {
       <Routes>
         <Route path="/" element={<Navigate to="/citas" replace />} />
         <Route path="/citas" element={<Citas />} />
-        <Route path="/clientes" element={<Clientes />} />
+        <Route path="/clientes" element={<Clientes onAddClient={() => setShowQuickClientForm(true)} />} />
         <Route path="/clientes/:id" element={<ClienteDetalle />} />
         <Route path="/servicios" element={<Servicios isAdmin={isAdmin} />} />
         <Route path="/configuracion" element={<ModulePage title="Configuración" description={isAdmin ? 'Administra las opciones del espacio de trabajo.' : 'Esta sección está disponible solo para la administradora.'} role={roleLabels[profile.role]} />} />
