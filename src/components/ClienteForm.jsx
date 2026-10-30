@@ -42,7 +42,10 @@ const optionalFields = [
 const allFields = [...requiredFields, ...optionalFields]
 
 function getInitialValues(client) {
-  const values = Object.fromEntries(allFields.map(({ name }) => [name, client?.[name] ?? '']))
+  const values = Object.fromEntries(allFields.map(({ name }) => {
+    const value = client?.[name]
+    return [name, value == null ? '' : String(value)]
+  }))
   values.estatura = normalizeHeightToMeters(values.estatura)
   return values
 }
@@ -99,26 +102,30 @@ function ClienteForm({ client = null, quick = false, onClose, onSaved }) {
 
     setSaving(true)
     setError('')
-    const payload = Object.fromEntries(
-      fields.map(({ name }) => [name, name === 'estatura' ? heightValue || null : values[name].trim() || null]),
-    )
-    payload.nombre = values.nombre.trim()
-    payload.telefono = values.telefono.trim()
-    if (isEditing) payload.updated_at = new Date().toISOString()
+    try {
+      const payload = Object.fromEntries(
+        fields.map(({ name }) => [name, name === 'estatura' ? heightValue || null : String(values[name] ?? '').trim() || null]),
+      )
+      payload.nombre = String(values.nombre ?? '').trim()
+      payload.telefono = String(values.telefono ?? '').trim()
+      if (isEditing) payload.updated_at = new Date().toISOString()
 
-    const request = isEditing
-      ? supabase.from('clientes').update(payload).eq('id', client.id).select('*').single()
-      : supabase.from('clientes').insert(payload).select('*').single()
-    const { data, error: saveError } = await request
+      const request = isEditing
+        ? supabase.from('clientes').update(payload).eq('id', client.id).select('*').single()
+        : supabase.from('clientes').insert(payload).select('*').single()
+      const { data, error: saveError } = await request
 
-    if (saveError) {
+      if (saveError) {
+        setError(getSaveError(saveError))
+        return
+      }
+
+      onSaved(data)
+    } catch (saveError) {
       setError(getSaveError(saveError))
+    } finally {
       setSaving(false)
-      return
     }
-
-    setSaving(false)
-    onSaved(data)
   }
 
   return (

@@ -7,6 +7,7 @@ import { useVisualViewport } from '@/hooks/useVisualViewport'
 import PatientSignatureField from '@/components/PatientSignatureField'
 import { uploadClinicalSignature } from '@/lib/clinicalSignature'
 import { calculateAgeAtDate, civilStatusOptions, normalizeHeightToMeters, saveClinicalGeneralDataToHistory, saveClinicalPatientData } from '@/lib/clinicalPatientData'
+import { parseClinicalHistoryContent } from '@/lib/clinicalHistoryContent'
 
 const columns = [
 	[
@@ -31,8 +32,11 @@ const zones = [
 const points = ['inicio', 'medio', 'final']
 const initialClinical = Object.fromEntries(clinicalKeys.map(([key]) => [key, false]))
 
-function initialMeasurements() {
-	return Object.fromEntries(zones.map(([key]) => [key, { inicio: '', medio: '', final: '' }]))
+function readMeasurements(saved = {}) {
+	return Object.fromEntries(zones.map(([key]) => {
+		const values = saved[key] ?? {}
+		return [key, Object.fromEntries(points.map((point) => [point, values[point] ?? '']))]
+	}))
 }
 
 function formatToday() {
@@ -51,24 +55,29 @@ function HistoryValue({ label, value }) {
 
 function HistoriaClinicaCorporal({ cita, onGuardado, onCerrar }) {
 	const client = Array.isArray(cita.cliente) ? cita.cliente[0] : cita.cliente
+	const existingHistory = cita.historiaClinica ?? null
+	const initialContent = parseClinicalHistoryContent(existingHistory?.contenido)
+	const initialGeneralData = initialContent.datos_generales ?? {}
+	const initialPhysical = initialContent.datos_fisicos ?? {}
 	const overlayRef = useRef(null)
 	const signatureRef = useRef(null)
 	useVisualViewport(overlayRef)
-	const [motivo, setMotivo] = useState('')
-	const [fechaNacimiento, setFechaNacimiento] = useState(client?.fecha_nacimiento?.slice(0, 10) ?? '')
-	const [estadoCivil, setEstadoCivil] = useState(client?.estado_civil ?? '')
+	const [motivo, setMotivo] = useState(initialContent.motivo_consulta ?? '')
+	const [fechaNacimiento, setFechaNacimiento] = useState(initialGeneralData.fecha_nacimiento ?? client?.fecha_nacimiento?.slice(0, 10) ?? '')
+	const [estadoCivil, setEstadoCivil] = useState(initialGeneralData.estado_civil ?? client?.estado_civil ?? '')
 	const [physical, setPhysical] = useState({
-		peso: '',
-		estatura: normalizeHeightToMeters(client?.estatura),
+		peso: initialPhysical.peso == null ? '' : String(initialPhysical.peso),
+		estatura: normalizeHeightToMeters(initialPhysical.estatura ?? client?.estatura),
 	})
-	const [clinical, setClinical] = useState(initialClinical)
-	const [measurements, setMeasurements] = useState(initialMeasurements)
-	const [sessions, setSessions] = useState([{ numero: 1, fecha: '', observaciones: '', firmado: false }])
+	const [clinical, setClinical] = useState({ ...initialClinical, ...(initialContent.datos_clinicos ?? {}) })
+	const [measurements, setMeasurements] = useState(() => readMeasurements(initialContent.medidas_corporales))
+	const [sessions, setSessions] = useState(Array.isArray(initialContent.sesiones) && initialContent.sesiones.length ? initialContent.sesiones : [{ numero: 1, fecha: '', observaciones: '', firmado: false }])
 	const [hasSignature, setHasSignature] = useState(false)
 	const [saving, setSaving] = useState(false)
 	const [error, setError] = useState('')
 	const [submitAttempted, setSubmitAttempted] = useState(false)
 	const [savedHistory, setSavedHistory] = useState(null)
+	const existingSignaturePath = initialContent.firma_url ?? ''
 	const professional = Array.isArray(cita.profesional) ? cita.profesional[0] : cita.profesional
 	const currentAge = calculateAgeAtDate(fechaNacimiento)
 	const ageAtAppointment = calculateAgeAtDate(fechaNacimiento, cita.fecha)
@@ -97,7 +106,7 @@ function HistoriaClinicaCorporal({ cita, onGuardado, onCerrar }) {
 			datos_clinicos: clinical,
 			medidas_corporales: Object.fromEntries(zones.map(([key]) => [key, Object.fromEntries(points.map((point) => [point, measurements[key][point] === '' ? null : Number(measurements[key][point])]))])),
 			sesiones: sessions,
-			firma_url: signaturePath,
+			firma_url: signaturePath || null,
 		}
 	}
 
@@ -122,7 +131,7 @@ function HistoriaClinicaCorporal({ cita, onGuardado, onCerrar }) {
 			setSubmitAttempted(true)
 			return
 		}
-		if (!hasSignature && !savedHistory) return
+		if (!hasSignature && !savedHistory && !existingHistory) return
 		const heightValue = normalizeHeightToMeters(physical.estatura)
 		const heightNumber = Number(heightValue)
 		if (heightValue && (!Number.isFinite(heightNumber) || heightNumber < 0.3 || heightNumber > 3)) {
@@ -140,26 +149,40 @@ function HistoriaClinicaCorporal({ cita, onGuardado, onCerrar }) {
 			if (!supabase) throw new Error('La conexión con Supabase no está configurada.')
 			const patientError = await saveClinicalPatientData(cita, fechaNacimiento, estadoCivil, physical.estatura)
 			if (patientError) throw new Error(patientError)
-			const { data: existing, error: existingError } = await supabase.from('historia_clinica').select('*').eq('cita_id', cita.id).eq('tipo', 'corporal').limit(1).maybeSingle()
-			if (existingError) throw new Error(errorText(existingError))
-			if (existing) {
-				const { history, error: generalDataError } = await saveClinicalGeneralDataToHistory(existing, fechaNacimiento, estadoCivil, cita.fecha)
-				if (generalDataError) throw new Error(generalDataError)
-				setSavedHistory(history)
-				await finishHistory(history)
-				setSaving(false)
-				return
+			let existing = existingHistory
+			if (!existing) {
+				const { data, error: existingError } = await supabase.from('historia_clinica').select('*').eq('cita_id', cita.id).eq('tipo', 'corporal').limit(1).maybeSingle()
+				if (existingError) throw new Error(errorText(existingError))
+				existing = data
 			}
-			const { path, error: signatureError } = await uploadClinicalSignature(signatureRef.current, cita.id)
-			if (signatureError) throw new Error(signatureError)
-			const { data, error: saveError } = await supabase.from('historia_clinica').insert({
+			if (existing) {
+				if (!existingHistory) {
+					const { history, error: generalDataError } = await saveClinicalGeneralDataToHistory(existing, fechaNacimiento, estadoCivil, cita.fecha)
+					if (generalDataError) throw new Error(generalDataError)
+					setSavedHistory(history)
+					await finishHistory(history)
+					setSaving(false)
+					return
+				}
+			}
+			let signaturePath = existingHistory ? existingSignaturePath : ''
+			if (hasSignature) {
+				const { path, error: signatureError } = await uploadClinicalSignature(signatureRef.current, cita.id)
+				if (signatureError) throw new Error(signatureError)
+				signaturePath = path
+			}
+			if (!signaturePath && !existingHistory) throw new Error('La firma del paciente es obligatoria.')
+			const historyValues = {
 				cliente_id: cita.cliente_id,
 				cita_id: cita.id,
 				profesional_id: cita.profesional_id,
 				tipo: 'corporal',
-				contenido: makeContent(path),
-				fecha: new Date().toISOString().split('T')[0],
-			}).select('*').single()
+				contenido: makeContent(signaturePath),
+				...(existingHistory ? {} : { fecha: new Date().toISOString().split('T')[0] }),
+			}
+			const { data, error: saveError } = existingHistory
+				? await supabase.from('historia_clinica').update(historyValues).eq('id', existingHistory.id).select('*').single()
+				: await supabase.from('historia_clinica').insert(historyValues).select('*').single()
 			if (saveError) throw new Error(errorText(saveError))
 			setSavedHistory(data)
 			await finishHistory(data)
@@ -177,7 +200,7 @@ function HistoriaClinicaCorporal({ cita, onGuardado, onCerrar }) {
 		<div ref={overlayRef} className="creation-overlay clinical-history-overlay">
 			<section className="clinical-history-dialog" role="dialog" aria-modal="true" aria-labelledby="body-history-title">
 				<header className="clinical-history__header">
-					<div><span className="eyebrow text-dorado-oscuro">EXPEDIENTE CLÍNICO</span><h2 id="body-history-title">Ficha Corporal</h2><p>{client?.nombre || 'Cliente'}</p></div>
+					<div><span className="eyebrow text-dorado-oscuro">EXPEDIENTE CLÍNICO</span><h2 id="body-history-title">{existingHistory ? 'Editar ficha corporal' : 'Ficha Corporal'}</h2><p>{client?.nombre || 'Cliente'}</p></div>
 					<button className="creation-dialog__close" type="button" aria-label="Cerrar ficha" onClick={onCerrar} disabled={saving}><X size={19} aria-hidden="true" /></button>
 				</header>
 				<form className="clinical-history__form" onSubmit={handleSubmit}>
@@ -220,9 +243,11 @@ function HistoriaClinicaCorporal({ cita, onGuardado, onCerrar }) {
 						</table></div>
 						<Button className="clinical-history__add-session" type="button" variant="outline" onClick={addSession} disabled={sessions.length >= 20}><Plus size={16} aria-hidden="true" /> {sessions.length >= 20 ? 'Máximo 20 sesiones' : 'Agregar sesión'}</Button>
 					</section>
-					<PatientSignatureField signatureRef={signatureRef} hasSignature={hasSignature} onSignatureChange={setHasSignature} />
+					{existingHistory
+						? <p className="clinical-history__signature-instruction" role="status">La firma original se conserva y no se puede cambiar al editar la historia.</p>
+						: <PatientSignatureField signatureRef={signatureRef} hasSignature={hasSignature} onSignatureChange={setHasSignature} />}
 					{error && <p className="form-message form-message--error" role="alert">{error}</p>}
-					<div className="clinical-history__actions"><Button type="button" variant="outline" onClick={onCerrar} disabled={saving}>Cancelar</Button><Button type="submit" className="clinical-history__submit" disabled={saving} aria-disabled={!fechaNacimiento || !estadoCivil || !motivo.trim() || (!hasSignature && !savedHistory)}>{saving ? <LoaderCircle className="clinical-history__spinner" size={17} aria-hidden="true" /> : null}{savedHistory ? 'Reintentar finalizar cita' : saving ? 'Guardando…' : 'Guardar historia clínica'}</Button></div>
+					<div className="clinical-history__actions"><Button type="button" variant="outline" onClick={onCerrar} disabled={saving}>Cancelar</Button><Button type="submit" className="clinical-history__submit" disabled={saving} aria-disabled={!fechaNacimiento || !estadoCivil || !motivo.trim() || (!hasSignature && !savedHistory && !existingHistory)}>{saving ? <LoaderCircle className="clinical-history__spinner" size={17} aria-hidden="true" /> : null}{savedHistory ? 'Reintentar finalizar cita' : saving ? 'Guardando…' : existingHistory ? 'Guardar cambios' : 'Guardar historia clínica'}</Button></div>
 					{submitAttempted && (!fechaNacimiento || !estadoCivil || !motivo.trim()) && <p className="clinical-history__missing-fields" role="alert">Faltan: {[!fechaNacimiento && 'Fecha de nacimiento', !estadoCivil && 'Estado civil', !motivo.trim() && 'Motivo de la consulta'].filter(Boolean).join(', ')}.</p>}
 				</form>
 			</section>

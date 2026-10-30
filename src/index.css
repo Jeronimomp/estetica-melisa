@@ -5,21 +5,27 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  --theme-primary: #708238;
+  --theme-primary-hover: #58692d;
+  --theme-primary-deep: #4a5e2a;
+  --theme-soft: #f0f2e7;
+  --theme-border: #dbe0d1;
+  --theme-ring: #8d9b61;
   --background: #f8f8f5;
   --foreground: #25291c;
   --card: #ffffff;
   --card-foreground: #25291c;
-  --primary: #708238;
+  --primary: var(--theme-primary);
   --primary-foreground: #ffffff;
-  --secondary: #f0f2e7;
-  --secondary-foreground: #708238;
+  --secondary: var(--theme-soft);
+  --secondary-foreground: var(--theme-primary);
   --muted: #f3f4ed;
   --muted-foreground: #737867;
   --accent: #d98669;
   --accent-foreground: #ffffff;
   --border: #e2e5d9;
   --input: #dbe0d1;
-  --ring: #8d9b61;
+  --ring: var(--theme-ring);
   --font-sans: 'DM Sans', sans-serif;
   --font-serif: 'Cormorant Garamond', Georgia, serif;
   font-family: var(--font-sans);
@@ -32,20 +38,47 @@
   --popover: #ffffff;
   --popover-foreground: #25291c;
   --destructive: #b83d35;
-  --chart-1: #708238;
+  --chart-1: var(--theme-primary);
   --chart-2: #d98669;
-  --chart-3: #8d9b61;
+  --chart-3: var(--theme-ring);
   --chart-4: #c8d0b4;
-  --chart-5: #58692d;
+  --chart-5: var(--theme-primary-hover);
   --radius: 0.625rem;
   --sidebar: #f8f8f5;
   --sidebar-foreground: #25291c;
-  --sidebar-primary: #708238;
+  --sidebar-primary: var(--theme-primary);
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f0f2e7;
-  --sidebar-accent-foreground: #708238;
-  --sidebar-border: #e2e5d9;
-  --sidebar-ring: #8d9b61;
+  --sidebar-accent: var(--theme-soft);
+  --sidebar-accent-foreground: var(--theme-primary);
+  --sidebar-border: var(--theme-border);
+  --sidebar-ring: var(--theme-ring);
+}
+
+:root[data-app-theme='grafito'] {
+  --theme-primary: #484750;
+  --theme-primary-hover: #38373f;
+  --theme-primary-deep: #333238;
+  --theme-soft: #f0eff2;
+  --theme-border: #d5d3db;
+  --theme-ring: #777580;
+}
+
+:root[data-app-theme='oliva'] {
+  --theme-primary: #696d47;
+  --theme-primary-hover: #565a39;
+  --theme-primary-deep: #474a30;
+  --theme-soft: #f2f2e9;
+  --theme-border: #dcddca;
+  --theme-ring: #858a60;
+}
+
+:root[data-app-theme='malva'] {
+  --theme-primary: #a46188;
+  --theme-primary-hover: #884d70;
+  --theme-primary-deep: #713f5e;
+  --theme-soft: #f6edf2;
+  --theme-border: #e5d1dd;
+  --theme-ring: #bd83a5;
 }
 
 @theme inline {
@@ -113,7 +146,7 @@ button {
 
 ::selection {
   color: #ffffff;
-  background: #708238;
+  background: var(--theme-primary);
 }
 
 .dark {
@@ -123,7 +156,7 @@ button {
   --card-foreground: #f8f8f5;
   --popover: #252a1a;
   --popover-foreground: #f8f8f5;
-  --primary: #708238;
+  --primary: var(--theme-primary);
   --primary-foreground: #111506;
   --secondary: #3c4727;
   --secondary-foreground: #f8f8f5;
@@ -137,7 +170,7 @@ button {
   --ring: #a9b77a;
   --sidebar: #252a1a;
   --sidebar-foreground: #f8f8f5;
-  --sidebar-primary: #708238;
+  --sidebar-primary: var(--theme-primary);
   --sidebar-primary-foreground: #111506;
   --sidebar-accent: #3c4727;
   --sidebar-accent-foreground: #f8f8f5;

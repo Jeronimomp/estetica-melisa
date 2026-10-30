@@ -26,6 +26,8 @@ import ClienteDetalle from '@/pages/ClienteDetalle'
 import Clientes from '@/pages/Clientes'
 import Citas from '@/pages/Citas'
 import Servicios from '@/pages/Servicios'
+import ConfiguracionTema from '@/pages/ConfiguracionTema'
+import { DEFAULT_APP_THEME, isAppTheme } from '@/lib/appThemes'
 import './App.css'
 
 const roleLabels = {
@@ -330,6 +332,8 @@ function Workspace({ profile, onSignOut }) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const [showQuickClientForm, setShowQuickClientForm] = useState(false)
+  const [theme, setTheme] = useState({ id: DEFAULT_APP_THEME, saving: false, error: '', notice: '' })
+  const [themeSettingsAvailable, setThemeSettingsAvailable] = useState(true)
   const createActionLabel = pathname === '/clientes'
     ? 'Agregar un cliente'
     : ''
@@ -339,9 +343,83 @@ function Workspace({ profile, onSignOut }) {
     { label: 'Servicios', path: '/servicios', icon: BriefcaseBusiness },
     ...(isAdmin ? [{ label: 'Configuración', path: '/configuracion', icon: Settings, iconOnly: true }] : []),
   ]
+  const activeNavigationIndex = navigationItems.findIndex(({ path }) => (
+    pathname === path || pathname.startsWith(`${path}/`)
+  ))
+  const touchStartRef = useRef(null)
+
+  function handleNavigationTouchStart(event) {
+    if (!window.matchMedia('(max-width: 1024px)').matches) return
+    const target = event.target
+    if (!(target instanceof Element) || target.closest(
+      'input, textarea, select, [role="slider"], [contenteditable="true"], [data-swipe-ignore], [role="dialog"], [aria-modal="true"], .bottom-nav',
+    )) {
+      touchStartRef.current = null
+      return
+    }
+
+    const touch = event.touches[0]
+    if (!touch || touch.clientX < 24 || touch.clientX > window.innerWidth - 24) {
+      touchStartRef.current = null
+      return
+    }
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY }
+  }
+
+  function handleNavigationTouchEnd(event) {
+    const start = touchStartRef.current
+    touchStartRef.current = null
+    if (!start || activeNavigationIndex < 0) return
+
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+    const swipeThreshold = Math.max(42, Math.min(56, window.innerWidth * 0.12))
+    if (Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return
+
+    const nextIndex = activeNavigationIndex + (deltaX < 0 ? 1 : -1)
+    const nextItem = navigationItems[nextIndex]
+    if (nextItem) navigate(nextItem.path)
+  }
+
+  useEffect(() => {
+    if (!supabase) return undefined
+    let active = true
+    supabase.from('configuracion_app').select('valor').eq('clave', 'tema_visual').maybeSingle().then(({ data, error }) => {
+      if (!active) return
+      if (error) {
+        setThemeSettingsAvailable(false)
+        return
+      }
+      if (isAppTheme(data?.valor)) setTheme((current) => ({ ...current, id: data.valor }))
+    }).catch(() => {
+      if (active) setThemeSettingsAvailable(false)
+    })
+
+    const channel = supabase.channel('configuracion-tema-global')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'configuracion_app', filter: 'clave=eq.tema_visual' }, ({ new: row }) => {
+        if (isAppTheme(row?.valor)) setTheme((current) => ({ ...current, id: row.valor }))
+      })
+      .subscribe()
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.dataset.appTheme = theme.id
+  }, [theme.id])
 
   return (
-    <main className="workspace">
+    <main
+      className="workspace"
+      onTouchStart={handleNavigationTouchStart}
+      onTouchEnd={handleNavigationTouchEnd}
+      onTouchCancel={() => { touchStartRef.current = null }}
+    >
       <BirthdayNotifications />
       <aside className="workspace-sidebar">
         <img className="workspace-sidebar__logo" src={logo} alt="Estética Integral Melisa Peralta" />
@@ -367,9 +445,9 @@ function Workspace({ profile, onSignOut }) {
         <Route path="/" element={<Navigate to="/citas" replace />} />
         <Route path="/citas" element={<Citas />} />
         <Route path="/clientes" element={<Clientes onAddClient={() => setShowQuickClientForm(true)} />} />
-        <Route path="/clientes/:id" element={<ClienteDetalle />} />
+        <Route path="/clientes/:id" element={<ClienteDetalle isAdmin={isAdmin} />} />
         <Route path="/servicios" element={<Servicios isAdmin={isAdmin} />} />
-        <Route path="/configuracion" element={<ModulePage title="Configuración" description={isAdmin ? 'Administra las opciones del espacio de trabajo.' : 'Esta sección está disponible solo para la administradora.'} role={roleLabels[profile.role]} />} />
+        <Route path="/configuracion" element={<ConfiguracionTema isAdmin={isAdmin} theme={theme} themeSettingsAvailable={themeSettingsAvailable} onThemeChange={setTheme} />} />
         <Route path="*" element={<Navigate to="/citas" replace />} />
       </Routes>
       <nav className={`bottom-nav${isAdmin ? '' : ' bottom-nav--employee'}`} aria-label="Navegación principal">
@@ -408,18 +486,6 @@ function Workspace({ profile, onSignOut }) {
         />
       )}
     </main>
-  )
-}
-
-function ModulePage({ title, description, role, notice = '' }) {
-  return (
-    <section className="workspace-main" aria-live="polite">
-      <span className="eyebrow text-dorado-oscuro">{role}</span>
-      <h1>{title}</h1>
-      <p className="workspace-intro">{description}</p>
-      {notice && <p className="form-message form-message--success" role="status">{notice}</p>}
-      <p className="role-note"><ShieldCheck size={16} aria-hidden="true" /> Acceso asignado por administración</p>
-    </section>
   )
 }
 

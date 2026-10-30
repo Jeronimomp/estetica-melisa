@@ -7,6 +7,7 @@ import { useVisualViewport } from '@/hooks/useVisualViewport'
 import PatientSignatureField from '@/components/PatientSignatureField'
 import { uploadClinicalSignature } from '@/lib/clinicalSignature'
 import { calculateAgeAtDate, civilStatusOptions, saveClinicalGeneralDataToHistory, saveClinicalPatientData } from '@/lib/clinicalPatientData'
+import { parseClinicalHistoryContent } from '@/lib/clinicalHistoryContent'
 
 const columns = [
 	[
@@ -27,6 +28,18 @@ const columns = [
 ]
 const definitions = columns.flat()
 const initialPathology = Object.fromEntries(definitions.map(([key, , booleanOnly]) => [key, booleanOnly ? false : { valor: false, especifique: '' }]))
+function getPathologyInitialValue(saved = {}) {
+	return Object.fromEntries(definitions.map(([key, , booleanOnly]) => {
+		const value = saved[key]
+		if (booleanOnly) return [key, typeof value === 'boolean' ? value : false]
+		return [key, value && typeof value === 'object' ? { ...initialPathology[key], ...value } : initialPathology[key]]
+	}))
+}
+
+function getSkinTypeValue(value, label) {
+	return new RegExp(`${label}:\\s*([^;]+)`, 'i').exec(String(value ?? ''))?.[1]?.trim() ?? ''
+}
+
 const skinOptions = {
 	seca: ['Piel seca', 'Piel levemente seca', 'Piel medianamente seca', 'Piel muy seca'],
 	grasa: ['Piel grasa', 'Piel levemente grasa', 'Piel medianamente grasa', 'Piel muy grasa'],
@@ -48,22 +61,26 @@ function HistoryValue({ label, value }) {
 
 function HistoriaClinicaFacial({ cita, onGuardado, onCerrar }) {
 	const client = Array.isArray(cita.cliente) ? cita.cliente[0] : cita.cliente
+	const existingHistory = cita.historiaClinica ?? null
+	const initialContent = parseClinicalHistoryContent(existingHistory?.contenido)
+	const initialGeneralData = initialContent.datos_generales ?? {}
 	const overlayRef = useRef(null)
 	const signatureRef = useRef(null)
 	useVisualViewport(overlayRef)
-	const [motivo, setMotivo] = useState('')
-	const [fechaNacimiento, setFechaNacimiento] = useState(client?.fecha_nacimiento?.slice(0, 10) ?? '')
-	const [estadoCivil, setEstadoCivil] = useState(client?.estado_civil ?? '')
-	const [pathology, setPathology] = useState(initialPathology)
-	const [drySkin, setDrySkin] = useState('')
-	const [oilySkin, setOilySkin] = useState('')
-	const [skinNotes, setSkinNotes] = useState('')
+	const [motivo, setMotivo] = useState(initialContent.motivo_consulta ?? '')
+	const [fechaNacimiento, setFechaNacimiento] = useState(initialGeneralData.fecha_nacimiento ?? client?.fecha_nacimiento?.slice(0, 10) ?? '')
+	const [estadoCivil, setEstadoCivil] = useState(initialGeneralData.estado_civil ?? client?.estado_civil ?? '')
+	const [pathology, setPathology] = useState(() => getPathologyInitialValue(initialContent.informe_patologico))
+	const [drySkin, setDrySkin] = useState(() => getSkinTypeValue(initialContent.clase_cutis, 'Piel seca'))
+	const [oilySkin, setOilySkin] = useState(() => getSkinTypeValue(initialContent.clase_cutis, 'Piel grasa'))
+	const [skinNotes, setSkinNotes] = useState(initialContent.observaciones_cutis ?? '')
 	const [hasSignature, setHasSignature] = useState(false)
 	const [saving, setSaving] = useState(false)
 	const [error, setError] = useState('')
 	const [submitAttempted, setSubmitAttempted] = useState(false)
 	const [savedHistory, setSavedHistory] = useState(null)
 	const professional = Array.isArray(cita.profesional) ? cita.profesional[0] : cita.profesional
+	const existingSignaturePath = initialContent.firma_url ?? ''
 	const currentAge = calculateAgeAtDate(fechaNacimiento)
 	const ageAtAppointment = calculateAgeAtDate(fechaNacimiento, cita.fecha)
 
@@ -95,7 +112,7 @@ function HistoriaClinicaFacial({ cita, onGuardado, onCerrar }) {
 			setSubmitAttempted(true)
 			return
 		}
-		if (!hasSignature && !savedHistory) return
+		if (!hasSignature && !savedHistory && !existingHistory) return
 		setSaving(true)
 		setError('')
 		try {
@@ -108,19 +125,30 @@ function HistoriaClinicaFacial({ cita, onGuardado, onCerrar }) {
 			const patientError = await saveClinicalPatientData(cita, fechaNacimiento, estadoCivil)
 			if (patientError) throw new Error(patientError)
 
-			const { data: existing, error: existingError } = await supabase.from('historia_clinica').select('*').eq('cita_id', cita.id).eq('tipo', 'facial').limit(1).maybeSingle()
-			if (existingError) throw new Error(formError(existingError))
+			let existing = existingHistory
+			if (!existing) {
+				const { data, error: existingError } = await supabase.from('historia_clinica').select('*').eq('cita_id', cita.id).eq('tipo', 'facial').limit(1).maybeSingle()
+				if (existingError) throw new Error(formError(existingError))
+				existing = data
+			}
 			if (existing) {
-				const { history, error: generalDataError } = await saveClinicalGeneralDataToHistory(existing, fechaNacimiento, estadoCivil, cita.fecha)
-				if (generalDataError) throw new Error(generalDataError)
-				setSavedHistory(history)
-				await finishHistory(history)
-				setSaving(false)
-				return
+				if (!existingHistory) {
+					const { history, error: generalDataError } = await saveClinicalGeneralDataToHistory(existing, fechaNacimiento, estadoCivil, cita.fecha)
+					if (generalDataError) throw new Error(generalDataError)
+					setSavedHistory(history)
+					await finishHistory(history)
+					setSaving(false)
+					return
+				}
 			}
 
-			const { path, error: signatureError } = await uploadClinicalSignature(signatureRef.current, cita.id)
-			if (signatureError) throw new Error(signatureError)
+			let signaturePath = existingHistory ? existingSignaturePath : ''
+			if (hasSignature) {
+				const { path, error: signatureError } = await uploadClinicalSignature(signatureRef.current, cita.id)
+				if (signatureError) throw new Error(signatureError)
+				signaturePath = path
+			}
+			if (!signaturePath && !existingHistory) throw new Error('La firma del paciente es obligatoria.')
 			const pathologyContent = Object.fromEntries(definitions.map(([key]) => [key, pathology[key]]))
 			const content = {
 				motivo_consulta: motivo.trim(),
@@ -128,16 +156,19 @@ function HistoriaClinicaFacial({ cita, onGuardado, onCerrar }) {
 				informe_patologico: pathologyContent,
 				clase_cutis: [drySkin && `Piel seca: ${drySkin}`, oilySkin && `Piel grasa: ${oilySkin}`].filter(Boolean).join('; '),
 				observaciones_cutis: skinNotes.trim(),
-				firma_url: path,
+				firma_url: signaturePath || null,
 			}
-			const { data, error: saveError } = await supabase.from('historia_clinica').insert({
+			const historyValues = {
 				cliente_id: cita.cliente_id,
 				cita_id: cita.id,
 				profesional_id: cita.profesional_id,
 				tipo: 'facial',
 				contenido: content,
-				fecha: new Date().toISOString().split('T')[0],
-			}).select('*').single()
+				...(existingHistory ? {} : { fecha: new Date().toISOString().split('T')[0] }),
+			}
+			const { data, error: saveError } = existingHistory
+				? await supabase.from('historia_clinica').update(historyValues).eq('id', existingHistory.id).select('*').single()
+				: await supabase.from('historia_clinica').insert(historyValues).select('*').single()
 			if (saveError) throw new Error(formError(saveError))
 			setSavedHistory(data)
 			await finishHistory(data)
@@ -149,9 +180,9 @@ function HistoriaClinicaFacial({ cita, onGuardado, onCerrar }) {
 
 	return (
 		<div ref={overlayRef} className="creation-overlay clinical-history-overlay">
-			<section className="clinical-history-dialog" role="dialog" aria-modal="true" aria-labelledby="facial-history-title">
+					<section className="clinical-history-dialog" role="dialog" aria-modal="true" aria-labelledby="facial-history-title">
 				<header className="clinical-history__header">
-					<div><span className="eyebrow text-dorado-oscuro">EXPEDIENTE CLÍNICO</span><h2 id="facial-history-title">Ficha Facial</h2><p>{client?.nombre || 'Cliente'}</p></div>
+										<div><span className="eyebrow text-dorado-oscuro">EXPEDIENTE CLÍNICO</span><h2 id="facial-history-title">{existingHistory ? 'Editar ficha facial' : 'Ficha Facial'}</h2><p>{client?.nombre || 'Cliente'}</p></div>
 					<button className="creation-dialog__close" type="button" aria-label="Cerrar ficha" onClick={onCerrar} disabled={saving}><X size={19} aria-hidden="true" /></button>
 				</header>
 				<form className="clinical-history__form" onSubmit={handleSubmit}>
@@ -200,11 +231,13 @@ function HistoriaClinicaFacial({ cita, onGuardado, onCerrar }) {
 						</div>
 						<label className="clinical-history__field clinical-history__field--wide"><span>Observaciones de cutis</span><textarea value={skinNotes} onChange={(event) => setSkinNotes(event.target.value)} rows={3} maxLength={2000} /></label>
 					</section>
-					<PatientSignatureField signatureRef={signatureRef} hasSignature={hasSignature} onSignatureChange={setHasSignature} />
+					  {existingHistory
+						  ? <p className="clinical-history__signature-instruction" role="status">La firma original se conserva y no se puede cambiar al editar la historia.</p>
+						  : <PatientSignatureField signatureRef={signatureRef} hasSignature={hasSignature} onSignatureChange={setHasSignature} />}
 					{error && <p className="form-message form-message--error" role="alert">{error}</p>}
 					<div className="clinical-history__actions">
 						<Button type="button" variant="outline" onClick={onCerrar} disabled={saving}>Cancelar</Button>
-						<Button type="submit" className="clinical-history__submit" disabled={saving} aria-disabled={!fechaNacimiento || !estadoCivil || !motivo.trim() || (!hasSignature && !savedHistory)}>{saving ? <LoaderCircle className="clinical-history__spinner" size={17} aria-hidden="true" /> : null}{savedHistory ? 'Reintentar finalizar cita' : saving ? 'Guardando…' : 'Guardar historia clínica'}</Button>
+						<Button type="submit" className="clinical-history__submit" disabled={saving} aria-disabled={!fechaNacimiento || !estadoCivil || !motivo.trim() || (!hasSignature && !savedHistory && !existingHistory)}>{saving ? <LoaderCircle className="clinical-history__spinner" size={17} aria-hidden="true" /> : null}{savedHistory ? 'Reintentar finalizar cita' : saving ? 'Guardando…' : existingHistory ? 'Guardar cambios' : 'Guardar historia clínica'}</Button>
 					</div>
 					{submitAttempted && (!fechaNacimiento || !estadoCivil || !motivo.trim()) && <p className="clinical-history__missing-fields" role="alert">Faltan: {[!fechaNacimiento && 'Fecha de nacimiento', !estadoCivil && 'Estado civil', !motivo.trim() && 'Motivo de la consulta'].filter(Boolean).join(', ')}.</p>}
 				</form>
